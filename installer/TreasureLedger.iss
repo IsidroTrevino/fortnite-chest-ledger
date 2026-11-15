@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.2.1"
+  #define AppVersion "1.3.0"
 #endif
 #ifndef ReleaseDir
   #define ReleaseDir "..\dist"
@@ -22,6 +22,11 @@ CloseApplications=yes
 CloseApplicationsFilter=TreasureLedger.exe
 RestartApplications=no
 WizardStyle=modern
+SetupIconFile=..\assets\treasure-chest.ico
+#ifdef SignProfile
+SignTool={#SignProfile}
+SignedUninstaller=yes
+#endif
 Compression=lzma2/normal
 SolidCompression=yes
 OutputDir={#ReleaseDir}

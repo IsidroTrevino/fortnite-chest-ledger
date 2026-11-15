@@ -92,14 +92,14 @@ unsafe fn running_process(target: &str) -> bool {
     found
 }
 
-pub unsafe fn standby(storage: PathBuf, replays: PathBuf) {
+pub unsafe fn standby(storage: PathBuf, replays: PathBuf, resumed: bool) {
     let mutex = CreateMutexW(null(), 0, wide("Local\\FortniteChestLedgerStandby").as_ptr());
     if mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS {
         if !mutex.is_null() { CloseHandle(mutex); }
         return;
     }
-    let mut was_running = false;
-    while enabled(&storage) {
+    let mut was_running = resumed && running_process("FortniteClient-Win64-Shipping.exe");
+    while enabled(&storage) && !update::in_progress() {
         let running = running_process("FortniteClient-Win64-Shipping.exe");
         if running && !was_running {
             if let Ok(exe) = std::env::current_exe() {

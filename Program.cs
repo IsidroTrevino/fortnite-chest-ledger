@@ -3,6 +3,9 @@ using System.Text;
 using ChestCounter;
 using TreasureLedger;
 
+if (args.Length > 0 && args[0] is "--check-update" or "--apply-update")
+    return await ReleaseUpdate.Run(args);
+
 if (args.Length != 2) return 2;
 
 string storage = args[0];

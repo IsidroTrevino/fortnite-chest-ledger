@@ -13,6 +13,10 @@ Get the files from [the latest release](https://github.com/IsidroTrevino/fortnit
 
 Both run on Windows 10 or 11 x64 and include the replay decoder. If you're updating from an older ZIP, close the old counter before opening this version. The app uses your existing local history.
 
+## Automatic updates
+
+Install or download version 1.3.0 once to enable automatic updates. The counter checks GitHub on launch and every six hours while open. A newer stable release downloads in the background and installs when you close the counter. Use **Restart to update** to apply a ready update and reopen the counter immediately. Installed copies use the setup package and portable copies replace the executable in place. An offline PC can keep counting and will retry after it reconnects.
+
 ## Start tracking
 
 1. In Fortnite, turn on **Settings → Game → Replays → Record Replays**.
@@ -28,7 +32,7 @@ Once processed, a match stays in your history after the original replay is delet
 
 ## Build from source
 
-You need the Windows SDK, Rust for the MSVC target, and the .NET 10 SDK. Python 3 assembles the standalone executable. Inno Setup 7 builds the optional installer.
+You need the Windows SDK, Rust for the MSVC target, and the .NET 10 SDK. Run the build in a Visual Studio Developer PowerShell so Cargo can find `rc.exe`. Python 3 assembles the standalone executable. Inno Setup 7 builds the optional installer.
 
 Build from the repository root in PowerShell.
 
@@ -43,8 +47,14 @@ Copy-Item "$env:ProgramFiles\dotnet\ThirdPartyNotices.txt" dist/ThirdPartyNotice
 ISCC.exe installer/TreasureLedger.iss
 ```
 
+To publish an update, bump the version in `native/Cargo.toml` and `installer/TreasureLedger.iss`, rebuild both executables, and attach `TreasureLedger.exe` and `FortniteChestLedger-Setup.exe` to a stable GitHub release tagged `vX.Y.Z`. Keep the asset filenames unchanged. The app uses the latest stable release and verifies each asset against the SHA-256 digest published by GitHub.
+
+Current downloads are unsigned. For a signed release, Authenticode-sign `TreasureDecoder.exe` before bundling it, then sign the completed portable executable before compiling the installer. Configure Inno Setup's signing tool and pass `/DSignProfile=your-tool-name` to sign Setup and its uninstaller. Use the same trusted publisher identity for subsequent releases and sign every binary before uploading. See [Microsoft's SmartScreen guidance](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation).
+
 The app reads the default Fortnite replay folder. Run `TreasureLedger.exe --replays "C:\path\to\Demos"` to use a custom location. For an integration check, run `python tests/verify_history.py dist/decoder/TreasureDecoder.exe "C:\path\to\a-finished-squad.replay"`.
 
 ## Credits and license
 
 The project is independent of Epic Games. Replay analysis adapts [LED-N/Fortnite-ChestCounter v1.5.1](https://github.com/LED-N/Fortnite-ChestCounter/tree/v1.5.1) and [Shiqan/FortniteReplayDecompressor](https://github.com/Shiqan/FortniteReplayDecompressor) under their MIT licenses. See [the Chest Counter license](LICENSE-ChestCounter.txt) and [the replay decoder license](lib/LICENSE-FortniteReplayDecompressor).
+
+The app icon uses a screenshot of the in-game Treasure Hunters chest supplied by the project owner. The Fortnite artwork belongs to Epic Games.

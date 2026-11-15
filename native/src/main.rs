@@ -21,6 +21,7 @@ use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SELECTED, ODS_FOCUS, SetWindowTheme};
 mod startup;
 mod decoder;
+mod update;
 
 const INK: u32 = rgb(237, 241, 247);
 const MUTED: u32 = rgb(143, 156, 176);
@@ -38,6 +39,7 @@ const ID_LIST: usize = 103;
 const ID_SCAN: usize = 104;
 const ID_STARTUP: usize = 105;
 const ID_DATA: usize = 106;
+const ID_UPDATE: usize = 107;
 
 thread_local! { static STATE: RefCell<Option<App>> = const { RefCell::new(None) }; }
 
@@ -141,6 +143,8 @@ struct App {
     scan_button: HWND,
     startup_button: HWND,
     data_button: HWND,
+    update_button: HWND,
+    updates: update::Updates,
     list: HWND,
     storage: PathBuf,
     replay_watch: Watch,
@@ -167,17 +171,20 @@ impl App {
         let scan_button = control(window, "BUTTON", "Scan now", ID_SCAN, WS_TABSTOP);
         let startup_button = control(window, "BUTTON", "", ID_STARTUP, WS_TABSTOP);
         let data_button = control(window, "BUTTON", "Open history folder", ID_DATA, WS_TABSTOP);
+        let update_button = control(window, "BUTTON", "Restart to update", ID_UPDATE, WS_TABSTOP);
+        ShowWindow(update_button, SW_HIDE);
         let list = control(window, "LISTBOX", "", ID_LIST, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32 | LBS_OWNERDRAWFIXED as u32 | LBS_HASSTRINGS as u32);
         SendMessageW(list, LB_SETITEMHEIGHT, 0, 44);
         SetWindowTheme(list, wide("DarkMode_Explorer").as_ptr(), null());
         let list_font = font("Segoe UI", 15, 400);
         let button_font = font("Segoe UI", 15, 400);
         SendMessageW(list, WM_SETFONT, list_font as usize, 1);
-        for button in [overlay_button, scan_button, startup_button, data_button] {
+        for button in [overlay_button, scan_button, startup_button, data_button, update_button] {
             SendMessageW(button, WM_SETFONT, button_font as usize, 1);
         }
         let mut app = Self {
-            window, overlay, overlay_button, scan_button, startup_button, data_button, list, storage,
+            window, overlay, overlay_button, scan_button, startup_button, data_button, update_button,
+            updates: update::Updates::new(), list, storage,
             replay_watch: Watch::new(replays), child: None,
             due: Some(Instant::now()), periodic: Instant::now() + Duration::from_secs(300),
             status: "Starting replay scan".into(), overlay_on, overlay_demo, foreground: null_mut(), fortnite: false,
@@ -218,6 +225,10 @@ impl App {
     }
 
     unsafe fn tick(&mut self) {
+        if self.updates.tick(&self.storage) {
+            ShowWindow(self.update_button, if self.updates.ready.is_some() { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            InvalidateRect(self.window, null(), 0);
+        }
         let now = Instant::now();
         let replay_change = self.replay_watch.changed();
         if replay_change { self.due = Some(now + Duration::from_secs(8)); }
@@ -305,6 +316,7 @@ impl App {
         let height = area.bottom;
         MoveWindow(self.overlay_button, 18, 233, 174, 40, 1);
         MoveWindow(self.startup_button, 18, 283, 174, 44, 1);
+        MoveWindow(self.update_button, 18, 358, 174, 40, 1);
         MoveWindow(self.data_button, 18, height - 100, 174, 38, 1);
         MoveWindow(self.scan_button, width - 136, 37, 104, 36, 1);
         MoveWindow(self.list, 240, 442, (width - 272).max(1), (height - 633).max(44), 1);
@@ -319,17 +331,20 @@ impl App {
         fill(dc, area, PAPER);
         fill(dc, rect(0, 0, 210, height), NIGHT);
         fill(dc, rect(209, 0, 1, height), LINE);
-        rounded(dc, rect(24, 28, 36, 36), GOLD, 10);
-        txt(dc, "T", 34, 30, 24, 32, 26, 800, NIGHT);
+        DrawIconEx(dc, 23, 26, app_icon(), 40, 40, 0, null_mut(), DI_NORMAL);
         txt(dc, "TREASURE", 72, 28, 120, 21, 16, 700, INK);
         txt(dc, "CHEST LEDGER", 72, 49, 125, 18, 11, 600, MUTED);
         rounded(dc, rect(18, 111, 174, 45), rgb(45, 39, 32), 10);
         fill(dc, rect(18, 122, 3, 23), GOLD);
         txt(dc, "Overview", 38, 122, 130, 23, 17, 600, GOLD);
         txt(dc, "TRACKING", 28, 202, 150, 20, 11, 700, MUTED);
+        if let Some(tag) = &self.updates.ready {
+            let message = if self.updates.failed { format!("{tag} could not install") } else { format!("{tag} ready · installs on close") };
+            txt(dc, &message, 28, 406, 165, 20, 11, 500, GOLD);
+        }
         txt(dc, "Your counts are saved", 27, height - 155, 167, 19, 13, 600, PALE);
         txt(dc, "after every match.", 27, height - 136, 167, 19, 13, 400, MUTED);
-        txt(dc, "TREASURE HUNTERS", 27, height - 38, 160, 18, 10, 700, MUTED);
+        txt(dc, &format!("VERSION {}", update::VERSION), 27, height - 38, 160, 18, 10, 700, MUTED);
 
         txt(dc, "Your treasure hunt", x, 31, 530, 41, 32, 700, INK);
         let subtitle = if self.snapshot.player.is_empty() { "Waiting for your first completed match".into() }
@@ -485,6 +500,13 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         WM_SIZE => { with_app(|app| app.layout()); 0 }
         WM_TIMER => { with_app(|app| app.tick()); 0 }
+        WM_CLOSE => {
+            with_app(|app| {
+                if app.updates.ready.is_some() { let _ = app.updates.apply(&app.storage, &app.replay_watch.path, false); }
+            });
+            DestroyWindow(hwnd);
+            0
+        }
         WM_COMMAND => {
             match wp & 0xffff {
                 ID_OVERLAY => with_app(|app| {
@@ -508,6 +530,14 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 ID_DATA => with_app(|app| {
                     ShellExecuteW(hwnd, wide("open").as_ptr(), wide(&app.storage.to_string_lossy()).as_ptr(), null(), null(), SW_SHOWNORMAL);
                 }),
+                ID_UPDATE => {
+                    let mut restart = false;
+                    with_app(|app| {
+                        restart = app.updates.ready.is_some() && app.updates.apply(&app.storage, &app.replay_watch.path, true).is_ok();
+                    });
+                    if restart { DestroyWindow(hwnd); }
+                    else { MessageBoxW(hwnd, wide("The update could not start. Try again shortly.").as_ptr(), wide("Fortnite Chest Ledger").as_ptr(), MB_OK | MB_ICONERROR); }
+                }
                 ID_LIST => { InvalidateRect(hwnd, null(), 0); }
                 _ => {}
             }
@@ -604,9 +634,14 @@ unsafe fn register(name: &[u16], procedure: WNDPROC) {
     cls.lpfnWndProc = procedure;
     cls.hInstance = GetModuleHandleW(null());
     cls.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    cls.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+    cls.hIcon = app_icon();
     cls.lpszClassName = name.as_ptr();
     RegisterClassW(&cls);
+}
+
+unsafe fn app_icon() -> HICON {
+    let icon = LoadIconW(GetModuleHandleW(null()), 101usize as *const u16);
+    if icon.is_null() { LoadIconW(null_mut(), IDI_APPLICATION) } else { icon }
 }
 
 fn main() {
@@ -617,6 +652,7 @@ fn main() {
     let mut standby = false;
     let mut auto = false;
     let mut disable_startup = false;
+    let mut resumed = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -626,6 +662,7 @@ fn main() {
             Some("--standby") => standby = true,
             Some("--auto") => auto = true,
             Some("--disable-startup") => disable_startup = true,
+            Some("--resume-standby") => resumed = true,
             _ => {}
         }
     }
@@ -634,7 +671,8 @@ fn main() {
             if startup::remove_for_uninstall(&storage, &replays).is_err() { std::process::exit(1); }
             return;
         }
-        if standby { startup::standby(storage, replays); return; }
+        if update::in_progress() { return; }
+        if standby { startup::standby(storage, replays, resumed); return; }
         let main_class = wide("TreasureLedgerMain");
         let overlay_class = wide("TreasureLedgerOverlay");
         let mutex = CreateMutexW(null(), 0, wide("Local\\FortniteChestLedgerWindow").as_ptr());
