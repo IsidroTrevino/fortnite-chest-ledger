@@ -15,7 +15,7 @@ Both run on Windows 10 or 11 x64 and include the replay decoder. If you're updat
 
 ## Automatic updates
 
-Install or download version 1.3.0 once to enable automatic updates. The counter checks GitHub on launch and every six hours while open. A newer stable release downloads in the background and installs when you close the counter. Use **Restart to update** to apply a ready update and reopen the counter immediately. Installed copies use the setup package and portable copies replace the executable in place. An offline PC can keep counting and will retry after it reconnects.
+Automatic updates are available in version 1.3.0 and later. The counter checks GitHub on launch and every six hours while open. A newer stable release downloads in the background and installs when you close the counter. Use **Restart to update** to apply a ready update and reopen the counter immediately. Installed copies use the setup package and portable copies replace the executable in place. An offline PC can keep counting and will retry after it reconnects.
 
 ## Start tracking
 
@@ -57,4 +57,4 @@ The app reads the default Fortnite replay folder. Run `TreasureLedger.exe --repl
 
 The project is independent of Epic Games. Replay analysis adapts [LED-N/Fortnite-ChestCounter v1.5.1](https://github.com/LED-N/Fortnite-ChestCounter/tree/v1.5.1) and [Shiqan/FortniteReplayDecompressor](https://github.com/Shiqan/FortniteReplayDecompressor) under their MIT licenses. See [the Chest Counter license](LICENSE-ChestCounter.txt) and [the replay decoder license](lib/LICENSE-FortniteReplayDecompressor).
 
-The app icon uses a screenshot of the in-game Treasure Hunters chest supplied by the project owner. The Fortnite artwork belongs to Epic Games.
+The app icon is an original front-view illustration based on the small gold Treasure Hunters chest found on the map. Fortnite belongs to Epic Games.
