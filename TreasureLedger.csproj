@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>TreasureDecoder</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>parser/ChestCounter.ico</ApplicationIcon>
+    <DefaultItemExcludes>$(DefaultItemExcludes);lib/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="lib/FortniteReplayReader/FortniteReplayReader.csproj" />
+    <EmbeddedResource Include="parser/content.json" LogicalName="content.json" />
+  </ItemGroup>
+</Project>
