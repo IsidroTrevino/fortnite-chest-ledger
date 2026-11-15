@@ -30,7 +30,7 @@ Once processed, a match stays in your history after the original replay is delet
 
 You need the Windows SDK, Rust for the MSVC target, and the .NET 10 SDK. Python 3 assembles the standalone executable. Inno Setup 7 builds the optional installer.
 
-Run these commands from the repository root in PowerShell:
+Build from the repository root in PowerShell.
 
 ```powershell
 cargo build --release --manifest-path native/Cargo.toml

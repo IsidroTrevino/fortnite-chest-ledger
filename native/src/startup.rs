@@ -5,19 +5,26 @@ use windows_sys::Win32::System::Registry::*;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const VALUE: &str = "FortniteChestLedger";
 
-pub fn enabled(storage: &Path) -> bool { storage.join("open-with-fortnite").exists() }
+pub fn enabled(storage: &Path) -> bool {
+    storage.join("open-with-fortnite").exists() && unsafe { registered_for_current_exe() }
+}
 
-pub unsafe fn remove_for_uninstall(storage: &Path, replays: &Path) -> Result<(), String> {
+unsafe fn registered_for_current_exe() -> bool {
     let mut key: HKEY = null_mut();
-    if RegOpenKeyExW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), 0, KEY_QUERY_VALUE, &mut key) != 0 { return Ok(()); }
+    if RegOpenKeyExW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), 0, KEY_QUERY_VALUE, &mut key) != 0 { return false; }
     let mut value = [0u16; 1024];
     let mut size = std::mem::size_of_val(&value) as u32;
     let status = RegQueryValueExW(key, wide(VALUE).as_ptr(), null_mut(), null_mut(), value.as_mut_ptr().cast(), &mut size);
     RegCloseKey(key);
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    if status != 0 { return false; }
+    let Ok(exe) = std::env::current_exe() else { return false; };
     let command = String::from_utf16_lossy(&value[..value.iter().position(|&unit| unit == 0).unwrap_or(value.len())]);
     let prefix = format!("\"{}\" --standby", exe.display());
-    if status == 0 && command.to_lowercase().starts_with(&prefix.to_lowercase()) {
+    command.to_lowercase().starts_with(&prefix.to_lowercase())
+}
+
+pub unsafe fn remove_for_uninstall(storage: &Path, replays: &Path) -> Result<(), String> {
+    if registered_for_current_exe() {
         configure(storage, replays, false)?;
         // The watcher checks its setting every four seconds before exiting.
         let name = wide("Local\\FortniteChestLedgerStandby");
