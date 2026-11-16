@@ -66,7 +66,8 @@ static class ReleaseUpdate
         string assetName = installer ? "FortniteChestLedger-Setup.exe" : "TreasureLedger.exe";
         var asset = root.GetProperty("assets").EnumerateArray().FirstOrDefault(a =>
             a.GetProperty("name").GetString() == assetName && a.GetProperty("state").GetString() == "uploaded");
-        if (asset.ValueKind == JsonValueKind.Undefined) return;
+        if (asset.ValueKind == JsonValueKind.Undefined)
+            throw new InvalidDataException("The latest release does not have an update for this copy of the app.");
         var digest = asset.GetProperty("digest").GetString() ?? "";
         var size = asset.GetProperty("size").GetInt64();
         string url = $"https://github.com/{Repo}/releases/download/{tag}/{assetName}";

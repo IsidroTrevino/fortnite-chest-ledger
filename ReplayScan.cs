@@ -7,6 +7,8 @@ sealed record ScanStatus(int Pending, int Unreadable, int Skipped);
 
 sealed class ReplayScan(string storage, History history)
 {
+    const int RewardScanVersion = 1;
+
     public ScanStatus Run(string folder, CancellationToken cancellation, Action<int, int>? progress = null)
     {
         var files = new DirectoryInfo(folder).GetFiles("*.replay").OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
@@ -21,8 +23,9 @@ sealed class ReplayScan(string storage, History history)
             file.Refresh();
             if (!file.Exists) continue;
 
-            var entry = new ReplayEntry(file.Length, file.LastWriteTimeUtc.Ticks, "counted");
-            if (history.Files.TryGetValue(name, out var previous) && previous.Bytes == entry.Bytes && previous.WriteTicks == entry.WriteTicks)
+            var entry = new ReplayEntry(file.Length, file.LastWriteTimeUtc.Ticks, "counted", RewardScan: RewardScanVersion);
+            if (history.Files.TryGetValue(name, out var previous) && previous.Bytes == entry.Bytes && previous.WriteTicks == entry.WriteTicks &&
+                (previous.Result != "counted" || previous.RewardScan >= RewardScanVersion))
             {
                 if (previous.Result == "unreadable") unreadable++;
                 if (previous.Result == "skipped") skipped++;
@@ -48,8 +51,12 @@ sealed class ReplayScan(string storage, History history)
                     var match = Ledger.FromReplay(result, file);
                     int found = history.Matches.FindIndex(m => m.MatchKey == match.MatchKey && m.Player == match.Player);
                     if (found < 0) history.Matches.Add(match);
-                    else if (match.StartedUtc == history.Matches[found].StartedUtc &&
-                             match.Count.Total > history.Matches[found].Count.Total) history.Matches[found] = match;
+                    else
+                    {
+                        var saved = history.Matches[found];
+                        var preferred = match.StartedUtc == saved.StartedUtc && match.Count.Total > saved.Count.Total ? match : saved;
+                        history.Matches[found] = preferred with { Rewards = TreasureProgress.Merge(saved.Rewards, match.Rewards) };
+                    }
                 }
                 else if (string.IsNullOrWhiteSpace(result.Playlist) && (result.Map is null || GameModes.IsSeasonMap(result.Map)))
                 {

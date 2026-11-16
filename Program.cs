@@ -55,6 +55,12 @@ try
         Write("state", message);
         long observed = mine.Sum(m => (long)Ledger.NearbySquad(m).Count.Total);
         Write("squad", Number(observed));
+        var odds = TreasureProgress.Odds(mine);
+        Write("odds", Number(odds.Solo + odds.Team), Number(odds.Solo), Number(odds.Team), odds.Chance, Number(odds.OneIn));
+        Write("reward-coverage", Number(mine.Count(m => m.Rewards is null)));
+        foreach (var reward in TreasureProgress.Cards(mine))
+            Write("reward", reward.Id, reward.Name, reward.Category, reward.Group,
+                reward.Count.ToString(CultureInfo.InvariantCulture), reward.Latest);
         foreach (var match in mine)
         {
             var team = Ledger.NearbySquad(match);

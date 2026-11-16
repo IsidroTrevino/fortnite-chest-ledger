@@ -22,6 +22,7 @@ use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SE
 mod startup;
 mod decoder;
 mod update;
+mod rewards;
 
 const INK: u32 = rgb(237, 241, 247);
 const MUTED: u32 = rgb(143, 156, 176);
@@ -40,6 +41,10 @@ const ID_SCAN: usize = 104;
 const ID_STARTUP: usize = 105;
 const ID_DATA: usize = 106;
 const ID_UPDATE: usize = 107;
+const ID_OVERVIEW: usize = 108;
+const ID_REWARDS: usize = 109;
+const ID_REWARD_LIST: usize = 110;
+const ID_CHECK_UPDATE: usize = 111;
 
 thread_local! { static STATE: RefCell<Option<App>> = const { RefCell::new(None) }; }
 
@@ -62,7 +67,13 @@ struct Snapshot {
     opened: String,
     broken: String,
     status: String,
-    squad_total: String,
+    combined: String,
+    solo_opens: String,
+    squad_opens: String,
+    token_chance: String,
+    one_in: String,
+    reward_coverage: String,
+    rewards: Vec<rewards::Card>,
     rows: Vec<MatchRow>,
 }
 
@@ -82,7 +93,20 @@ impl Snapshot {
                     snapshot.broken = (*broken).into();
                 }
                 ["state", status] => snapshot.status = (*status).into(),
-                ["squad", total] => snapshot.squad_total = (*total).into(),
+                ["odds", combined, solo, squad, chance, one_in] => {
+                    snapshot.combined = (*combined).into();
+                    snapshot.solo_opens = (*solo).into();
+                    snapshot.squad_opens = (*squad).into();
+                    snapshot.token_chance = (*chance).into();
+                    snapshot.one_in = (*one_in).into();
+                }
+                ["reward-coverage", count] => snapshot.reward_coverage = (*count).into(),
+                ["reward", id, name, category, group, count, latest] => {
+                    snapshot.rewards.push(rewards::Card {
+                        id: (*id).into(), name: (*name).into(), category: (*category).into(),
+                        group: (*group).into(), count: count.parse().unwrap_or(0), latest: (*latest).into(),
+                    });
+                }
                 ["match", date, mode, opened, broken, squad, detail] => {
                     snapshot.rows.push(MatchRow {
                         date: (*date).into(), mode: (*mode).into(), opened: (*opened).into(),
@@ -144,8 +168,13 @@ struct App {
     startup_button: HWND,
     data_button: HWND,
     update_button: HWND,
+    check_button: HWND,
+    overview_button: HWND,
+    rewards_button: HWND,
     updates: update::Updates,
     list: HWND,
+    reward_list: HWND,
+    show_rewards: bool,
     storage: PathBuf,
     replay_watch: Watch,
     child: Option<Child>,
@@ -172,19 +201,31 @@ impl App {
         let startup_button = control(window, "BUTTON", "", ID_STARTUP, WS_TABSTOP);
         let data_button = control(window, "BUTTON", "Open history folder", ID_DATA, WS_TABSTOP);
         let update_button = control(window, "BUTTON", "Restart to update", ID_UPDATE, WS_TABSTOP);
+        let check_button = control(window, "BUTTON", "Check for updates", ID_CHECK_UPDATE, WS_TABSTOP);
+        let overview_button = control(window, "BUTTON", "Overview", ID_OVERVIEW, WS_TABSTOP);
+        let rewards_button = control(window, "BUTTON", "Treasure rewards", ID_REWARDS, WS_TABSTOP);
         ShowWindow(update_button, SW_HIDE);
-        let list = control(window, "LISTBOX", "", ID_LIST, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32 | LBS_OWNERDRAWFIXED as u32 | LBS_HASSTRINGS as u32);
+        let list_style = WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32 |
+            LBS_OWNERDRAWFIXED as u32 | LBS_HASSTRINGS as u32;
+        let list = control(window, "LISTBOX", "", ID_LIST, list_style);
+        let reward_list = control(window, "LISTBOX", "", ID_REWARD_LIST, list_style);
+        ShowWindow(reward_list, SW_HIDE);
         SendMessageW(list, LB_SETITEMHEIGHT, 0, 44);
-        SetWindowTheme(list, wide("DarkMode_Explorer").as_ptr(), null());
+        SendMessageW(reward_list, LB_SETITEMHEIGHT, 0, rewards::ROW_HEIGHT as isize);
         let list_font = font("Segoe UI", 15, 400);
         let button_font = font("Segoe UI", 15, 400);
-        SendMessageW(list, WM_SETFONT, list_font as usize, 1);
-        for button in [overlay_button, scan_button, startup_button, data_button, update_button] {
+        for listbox in [list, reward_list] {
+            SetWindowTheme(listbox, wide("DarkMode_Explorer").as_ptr(), null());
+            SendMessageW(listbox, WM_SETFONT, list_font as usize, 1);
+        }
+        for button in [overlay_button, scan_button, startup_button, data_button, update_button, check_button,
+            overview_button, rewards_button] {
             SendMessageW(button, WM_SETFONT, button_font as usize, 1);
         }
         let mut app = Self {
             window, overlay, overlay_button, scan_button, startup_button, data_button, update_button,
-            updates: update::Updates::new(), list, storage,
+            check_button, overview_button, rewards_button, updates: update::Updates::new(), list, reward_list,
+            show_rewards: false, storage,
             replay_watch: Watch::new(replays), child: None,
             due: Some(Instant::now()), periodic: Instant::now() + Duration::from_secs(300),
             status: "Starting replay scan".into(), overlay_on, overlay_demo, foreground: null_mut(), fortnite: false,
@@ -219,9 +260,26 @@ impl App {
             SendMessageW(self.list, LB_SETTOPINDEX, top.min(self.snapshot.rows.len() - 1), 0);
         }
         SendMessageW(self.list, WM_SETREDRAW, 1, 0);
+        rewards::refresh(self.reward_list, &self.snapshot.rewards);
+        self.update_view();
         InvalidateRect(self.list, null(), 1);
         InvalidateRect(self.window, null(), 0);
         InvalidateRect(self.overlay, null(), 0);
+    }
+
+    unsafe fn update_view(&self) {
+        for (control, visible) in [(self.list, !self.show_rewards), (self.scan_button, !self.show_rewards),
+            (self.reward_list, self.show_rewards)] {
+            ShowWindow(control, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+        for control in [self.window, self.overview_button, self.rewards_button] {
+            InvalidateRect(control, null(), 0);
+        }
+    }
+
+    unsafe fn switch_view(&mut self, show_rewards: bool) {
+        self.show_rewards = show_rewards;
+        self.update_view();
     }
 
     unsafe fn tick(&mut self) {
@@ -316,10 +374,14 @@ impl App {
         let height = area.bottom;
         MoveWindow(self.overlay_button, 18, 233, 174, 40, 1);
         MoveWindow(self.startup_button, 18, 283, 174, 44, 1);
-        MoveWindow(self.update_button, 18, 358, 174, 40, 1);
+        MoveWindow(self.overview_button, 18, 105, 174, 38, 1);
+        MoveWindow(self.rewards_button, 18, 149, 174, 38, 1);
+        MoveWindow(self.check_button, 18, 350, 174, 38, 1);
+        MoveWindow(self.update_button, 18, 422, 174, 38, 1);
         MoveWindow(self.data_button, 18, height - 100, 174, 38, 1);
         MoveWindow(self.scan_button, width - 136, 37, 104, 36, 1);
         MoveWindow(self.list, 240, 442, (width - 272).max(1), (height - 633).max(44), 1);
+        MoveWindow(self.reward_list, 240, 143, (width - 272).max(1), (height - 198).max(1), 1);
         InvalidateRect(self.window, null(), 0);
     }
 
@@ -334,17 +396,23 @@ impl App {
         DrawIconEx(dc, 23, 26, app_icon(), 40, 40, 0, null_mut(), DI_NORMAL);
         txt(dc, "TREASURE", 72, 28, 120, 21, 16, 700, INK);
         txt(dc, "CHEST LEDGER", 72, 49, 125, 18, 11, 600, MUTED);
-        rounded(dc, rect(18, 111, 174, 45), rgb(45, 39, 32), 10);
-        fill(dc, rect(18, 122, 3, 23), GOLD);
-        txt(dc, "Overview", 38, 122, 130, 23, 17, 600, GOLD);
         txt(dc, "TRACKING", 28, 202, 150, 20, 11, 700, MUTED);
-        if let Some(tag) = &self.updates.ready {
-            let message = if self.updates.failed { format!("{tag} could not install") } else { format!("{tag} ready · installs on close") };
-            txt(dc, &message, 28, 406, 165, 20, 11, 500, GOLD);
-        }
+        let update_status = match &self.updates.ready {
+            Some(tag) if self.updates.failed => format!("{tag} could not install"),
+            Some(tag) => format!("{tag} ready to install"),
+            None => self.updates.status.into(),
+        };
+        txt(dc, &update_status, 28, 396, 158, 20, 12, 500, MUTED);
         txt(dc, "Your counts are saved", 27, height - 155, 167, 19, 13, 600, PALE);
         txt(dc, "after every match.", 27, height - 136, 167, 19, 13, 400, MUTED);
         txt(dc, &format!("VERSION {}", update::VERSION), 27, height - 38, 160, 18, 10, 700, MUTED);
+        fill(dc, rect(x, height - 38, 5, 5), if self.child.is_some() { GOLD } else { TEAL });
+        txt(dc, &self.status, x + 14, height - 45, available - 14, 23, 12, 400, MUTED);
+
+        if self.show_rewards {
+            rewards::heading(dc, x, available, &self.snapshot.rewards, &self.snapshot.reward_coverage);
+            return;
+        }
 
         txt(dc, "Your treasure hunt", x, 31, 530, 41, 32, 700, INK);
         let subtitle = if self.snapshot.player.is_empty() { "Waiting for your first completed match".into() }
@@ -363,7 +431,7 @@ impl App {
             txt(dc, display(value), left + 16, 164, card - 24, 40, 35, 700, if index == 0 { GOLD } else { INK });
             txt(dc, caption, left + 16, 211, card - 24, 18, 11, 400, MUTED);
         }
-        let activity_width = available * 58 / 100;
+        let activity_width = available * 36 / 100;
         rounded(dc, rect(x, 255, activity_width, 116), WHITE, 12);
         txt(dc, "Recent matches", x + 16, 268, activity_width - 32, 21, 14, 600, PALE);
         let values: Vec<f64> = self.snapshot.rows.iter().take(20).rev().map(|r|
@@ -377,11 +445,20 @@ impl App {
                 if index + 1 == values.len() { GOLD } else { rgb(68, 101, 111) }, 4);
         }
         let sx = x + activity_width + 12;
-        let sw = available - activity_width - 12;
-        rounded(dc, rect(sx, 255, sw, 116), WHITE, 12);
-        txt(dc, "Squad chests seen", sx + 16, 268, sw - 30, 21, 14, 600, PALE);
-        txt(dc, display(&self.snapshot.squad_total), sx + 16, 295, 143, 36, 30, 700, TEAL);
-        txt(dc, "You and nearby teammates", sx + 16, 337, sw - 30, 18, 12, 600, MUTED);
+        let sw = (available - activity_width - 24) / 2;
+        let solo = display(&self.snapshot.solo_opens);
+        let squad = display(&self.snapshot.squad_opens);
+        let breakdown = format!("{solo} solo  /  {squad} nearby squad");
+        let baseline = format!("Normal odds · 1 in {}", display(&self.snapshot.one_in));
+        for (left, label, value, caption, color) in [
+            (sx, "Combined chests opened", &self.snapshot.combined, &breakdown, TEAL),
+            (sx + sw + 12, "Pirate Shop token chance", &self.snapshot.token_chance, &baseline, GOLD),
+        ] {
+            rounded(dc, rect(left, 255, sw, 116), WHITE, 12);
+            txt(dc, label, left + 16, 268, sw - 30, 21, 14, 600, PALE);
+            txt(dc, display(value), left + 16, 294, sw - 30, 38, 30, 700, color);
+            txt(dc, caption, left + 16, 337, sw - 30, 18, 12, 500, MUTED);
+        }
         txt(dc, "Match history", x, 389, 220, 25, 20, 600, INK);
         txt(dc, &format!("{} opened   /   {} broken", display(&self.snapshot.opened), display(&self.snapshot.broken)),
             width - 310, 393, 278, 21, 13, 400, MUTED);
@@ -402,14 +479,15 @@ impl App {
         } else {
             txt(dc, "Completed matches will appear here automatically.", x + 16, bottom + 24, available - 32, 25, 15, 400, MUTED);
         }
-        fill(dc, rect(x, height - 38, 5, 5), if self.child.is_some() { GOLD } else { TEAL });
-        txt(dc, &self.status, x + 14, height - 45, available - 14, 23, 12, 400, MUTED);
     }
 
     unsafe fn draw_item(&self, item: &DRAWITEMSTRUCT) {
         let dc = item.hDC;
         let r = item.rcItem;
-        if item.CtlID as usize == ID_LIST {
+        let id = item.CtlID as usize;
+        if id == ID_REWARD_LIST {
+            rewards::draw_row(item, &self.snapshot.rewards);
+        } else if id == ID_LIST {
             fill(dc, r, PAPER);
             let Some(row) = self.snapshot.rows.get(item.itemID as usize) else { return; };
             let selected = item.itemState & ODS_SELECTED != 0;
@@ -432,14 +510,15 @@ impl App {
             let mut label = [0u16; 128];
             let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128);
             let label = String::from_utf16_lossy(&label[..n.max(0) as usize]);
-            let active = (item.CtlID as usize == ID_OVERLAY && self.overlay_on) ||
-                (item.CtlID as usize == ID_STARTUP && startup::enabled(&self.storage));
+            let nav_active = (id == ID_OVERVIEW && !self.show_rewards) || (id == ID_REWARDS && self.show_rewards);
+            let active = (id == ID_OVERLAY && self.overlay_on) || (id == ID_STARTUP && startup::enabled(&self.storage));
             let pressed = item.itemState & ODS_SELECTED != 0;
             fill(dc, r, if item.CtlID as usize == ID_SCAN { PAPER } else { NIGHT });
             rounded(dc, rect(r.left, r.top, r.right - r.left, r.bottom - r.top),
-                if pressed { rgb(64, 67, 69) } else if active { rgb(38, 48, 53) } else { WHITE }, 9);
+                if pressed { rgb(64, 67, 69) } else if nav_active { rgb(45, 39, 32) }
+                else if active { rgb(38, 48, 53) } else { WHITE }, 9);
             txt(dc, &label, r.left + 12, r.top + (r.bottom - r.top - 19) / 2, r.right - r.left - 19, 23,
-                if item.CtlID as usize == ID_STARTUP { 12 } else { 13 }, 500, if active { TEAL } else { PALE });
+                if id == ID_STARTUP { 12 } else { 13 }, 500, if nav_active { GOLD } else if active { TEAL } else { PALE });
             if item.itemState & ODS_FOCUS != 0 {
                 let focus = rect(r.left + 3, r.top + 3, r.right - r.left - 6, r.bottom - r.top - 6);
                 DrawFocusRect(dc, &focus);
@@ -467,7 +546,8 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     match msg {
         WM_ERASEBKGND => 1,
         WM_MEASUREITEM => {
-            (*(lp as *mut MEASUREITEMSTRUCT)).itemHeight = 44;
+            let item = &mut *(lp as *mut MEASUREITEMSTRUCT);
+            item.itemHeight = if item.CtlID as usize == ID_REWARD_LIST { rewards::ROW_HEIGHT } else { 44 };
             1
         }
         WM_DRAWITEM => { with_app(|app| app.draw_item(&*(lp as *const DRAWITEMSTRUCT))); 1 }
@@ -518,6 +598,12 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     app.place_overlay();
                 }),
                 ID_SCAN => with_app(|app| { app.due = Some(Instant::now()); }),
+                ID_OVERVIEW => with_app(|app| { app.switch_view(false); }),
+                ID_REWARDS => with_app(|app| { app.switch_view(true); }),
+                ID_CHECK_UPDATE => with_app(|app| {
+                    app.updates.request_check();
+                    app.tick();
+                }),
                 ID_STARTUP => {
                     let mut failure = None;
                     with_app(|app| {

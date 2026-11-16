@@ -12,8 +12,9 @@ sealed record ChestCount(int Opened, int Broken)
 
 sealed record Teammate(string? Player, string Name, ChestCount Count);
 sealed record Match(string Replay, string MatchKey, string Player,
-    string Name, string Playlist, DateTime StartedUtc, ChestCount Count, bool VehicleGap, Teammate[] Team);
-sealed record ReplayEntry(long Bytes, long WriteTicks, string Result, string? Error = null);
+    string Name, string Playlist, DateTime StartedUtc, ChestCount Count, bool VehicleGap, Teammate[] Team,
+    RecordedReward[]? Rewards = null);
+sealed record ReplayEntry(long Bytes, long WriteTicks, string Result, string? Error = null, int RewardScan = 0);
 sealed record SquadLine(string Name, ChestCount Count, string Source);
 sealed record SquadResult(ChestCount Count, SquadLine[] Lines);
 
@@ -64,7 +65,7 @@ static class Ledger
         return new Match(file.Name, Key(source.SessionId),
             Key(playerId ? source.EpicId! : "name:" + source.PlayerName),
             source.PlayerName ?? "Player", source.Playlist ?? "", source.MatchStartUtc ?? file.LastWriteTimeUtc,
-            new ChestCount(source.ChestsOpened - broken, broken), source.VehicleChestsMissing, team);
+            new ChestCount(source.ChestsOpened - broken, broken), source.VehicleChestsMissing, team, TreasureProgress.FromReplay(source));
     }
 
     public static SquadResult NearbySquad(Match match)

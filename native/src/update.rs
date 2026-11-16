@@ -9,23 +9,34 @@ pub struct Updates {
     child: Option<Child>,
     pub ready: Option<String>,
     pub failed: bool,
+    pub status: &'static str,
 }
 
 impl Updates {
     pub fn new() -> Self {
-        Self { next_check: Instant::now(), child: None, ready: None, failed: false }
+        Self { next_check: Instant::now(), child: None, ready: None, failed: false, status: "" }
+    }
+
+    pub fn request_check(&mut self) {
+        if self.child.is_none() { self.next_check = Instant::now(); }
     }
 
     pub fn tick(&mut self, storage: &Path) -> bool {
         let now = Instant::now();
+        let previous_status = self.status;
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(None) => {},
                 Ok(Some(exit)) => {
                     self.next_check = now + if exit.success() { CHECK_INTERVAL } else { RETRY_INTERVAL };
+                    self.status = if exit.success() { "You're up to date" } else { "Update check failed" };
                     self.child = None;
                 }
-                Err(_) => { self.next_check = now + RETRY_INTERVAL; self.child = None; }
+                Err(_) => {
+                    self.next_check = now + RETRY_INTERVAL;
+                    self.status = "Update check failed";
+                    self.child = None;
+                }
             }
         }
 
@@ -33,6 +44,7 @@ impl Updates {
             self.next_check = now + RETRY_INTERVAL;
             self.child = std::env::current_exe().and_then(|exe| decoder::command(storage)?.arg("--check-update")
                 .arg(storage).arg(exe).arg(VERSION).spawn()).ok();
+            self.status = if self.child.is_some() { "Checking for updates…" } else { "Update check failed" };
         }
 
         let staged = storage.join("updates");
@@ -44,7 +56,7 @@ impl Updates {
             (current.to_string_lossy().eq_ignore_ascii_case(target) && tag != format!("v{VERSION}")).then(|| tag.to_owned())
         });
         let failed = next.is_some() && staged.join("last-error.txt").exists();
-        if self.ready == next && self.failed == failed { return false; }
+        if self.ready == next && self.failed == failed && self.status == previous_status { return false; }
         self.ready = next;
         self.failed = failed;
         true
